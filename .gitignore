@@ -1,2 +1,15 @@
 .env/
 .env
+
+
+
+# Ignore Django migration files
+**/migrations/*.py
+**/migrations/*.pyc
+
+# But keep __init__.py so Django knows it's a Python package
+!**/migrations/__init__.py
+
+
+.idea/
+.vscode/
