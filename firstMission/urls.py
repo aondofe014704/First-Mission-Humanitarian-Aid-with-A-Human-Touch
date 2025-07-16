@@ -23,7 +23,7 @@ from rest_framework import permissions
 
 schema_view = get_schema_view(
    openapi.Info(
-      title="Snippets API",
+      title="API",
       default_version='v1',
       description="Test description",
       terms_of_service="https://www.google.com/policies/terms/",
@@ -36,12 +36,17 @@ schema_view = get_schema_view(
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    #user management via djoser
     path('api/', include('djoser.urls')),
     path('api/', include('djoser.urls.jwt')),
-    
-    # path('api/paystack', include('paystack.urls')),
-    # path('api/post', include('post.urls')),
+
+    #user app (custom endpoints)
+    path('api/post', include('post.urls')),
     path('api/', include('user.urls')),
+
+    #paystack donation
+    path("paystack/", include(('django_paystack.urls', 'paystack'), namespace='paystack')), #django paystack
+    path('api/donate/', include('paystack.urls')),
 
     path('swagger.<format>/', schema_view.without_ui(cache_timeout=0), name='schema-json'),
     path('swagger/', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),
