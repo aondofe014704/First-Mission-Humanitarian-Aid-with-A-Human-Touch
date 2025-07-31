@@ -1,8 +1,9 @@
-from rest_framework.routers import DefaultRouter
-from .views import DonationViewSet
+from django.urls import path
+from .views import DonationViewSet, paystack_webhook
 
-router = DefaultRouter()
-router.register(r'', DonationViewSet, basename='donation')
-
-urlpatterns = router.urls
-
+urlpatterns = [
+    path('', DonationViewSet.as_view({'get': 'list', 'post': 'create'}), name='donation-list'),
+    path('init/', DonationViewSet.as_view({'post': 'init_donation'}), name='donation-init'),
+    path('verify/', DonationViewSet.as_view({'post': 'verify_donation'}), name='donation-verify'),
+    path('webhook/', paystack_webhook, name='paystack_webhook'),
+]
