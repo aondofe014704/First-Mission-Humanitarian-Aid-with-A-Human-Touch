@@ -8,7 +8,10 @@
 **/migrations/*.pyc
 **/migrations/
 venv/
-*.sqlite3
+*.sqlite5
+db.sqlite5
+db.sqlite5/
+
 
 # But keep __init__.py so Django knows it's a Python package
 !**/migrations/__init__.py
