@@ -26,7 +26,7 @@ ALLOWED_HOSTS = ['127.0.0.1', 'localhost', 'first-mission-humanitarian-aid-with-
 
 CORS_ALLOWED_ORIGINS=[
     'http://localhost:5173',
-    'https://firstmission-ng.com'
+    'https://www.firstmission-ng.com'
 ]
 # CORS_ALLOW_HEADERS = list(default_headers) + [
 #     'cache-control',
