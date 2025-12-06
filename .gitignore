@@ -1,21 +1,26 @@
-.env/
+# Environment
 .env
 
-
-
-# Ignore Django migration files
-**/migrations/*.py
-**/migrations/*.pyc
-**/migrations/
+# Virtualenv
 venv/
+
+# SQLite dev DB
+*.sqlite3
 *.sqlite5
-db.sqlite5
-db.sqlite5/
 
-
-# But keep __init__.py so Django knows it's a Python package
+# Migrations cache (but keep migration .py files!)
+**/migrations/*.pyc
 !**/migrations/__init__.py
 
-
+# IDE/editor
 .idea/
 .vscode/
+
+# Python cache/logs
+*.pyc
+__pycache__/
+*.log
+
+# Static & media
+staticfiles/
+media/

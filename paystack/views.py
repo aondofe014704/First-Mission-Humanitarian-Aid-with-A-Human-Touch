@@ -3,64 +3,48 @@ import hmac
 import hashlib
 import requests
 from rest_framework import viewsets, status
-from rest_framework.decorators import action, api_view, permission_classes
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.decorators import action, api_view
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from django.conf import settings
+from django.db import transaction
 from .models import Donation
-from .serializers import DonationSerializer
+from .serializers import (
+    DonationSerializer,
+    DonationInitSerializer,
+    DonationVerifySerializer
+)
 from post.models import DonationPost
-from django.contrib.auth.models import User
 
 
-class DonationViewSet(viewsets.ModelViewSet):
-    queryset = Donation.objects.all()
+class DonationViewSet(viewsets.ReadOnlyModelViewSet):
+    """Public read-only access to donations"""
+    queryset = Donation.objects.select_related('donation_post').filter(verified=True)
     serializer_class = DonationSerializer
+    permission_classes = [AllowAny]
 
     def get_queryset(self):
-        # Authenticated users only see their own donations; anonymous cannot list (you can adjust if needed)
-        if self.request.user.is_authenticated:
-            return self.queryset.filter(user=self.request.user)
-        return Donation.objects.none()
+        qs = super().get_queryset()
+        post_id = self.request.query_params.get('donation_post')
+        if post_id:
+            qs = qs.filter(donation_post_id=post_id)
+        return qs
 
-    def perform_create(self, serializer):
-        raise NotImplementedError("Use the custom init_donation action to start a donation.")
-
-    @action(detail=False, methods=['post'], url_path='init', permission_classes=[AllowAny])
-    def init_donation(self, request):
-        amount = request.data.get('amount')
-        donation_post_id = request.data.get('donation_post')
-        donor_email = request.data.get('email')
-        donor_name = request.data.get('name', None)
-
-        if not amount or not donation_post_id or not donor_email:
-            return Response(
-                {"error": "Amount, donation_post, and email are required"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+    @action(detail=False, methods=['post'], permission_classes=[AllowAny])
+    def init(self, request):
+        serializer = DonationInitSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
 
         try:
-            amount = float(amount)
-            if amount < 100:
-                return Response(
-                    {"error": "Amount must be at least ₦100"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-        except (ValueError, TypeError):
-            return Response(
-                {"error": "Invalid amount format"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            donation_post = DonationPost.objects.get(id=donation_post_id)
+            donation_post = DonationPost.objects.get(id=data['donation_post'])
         except DonationPost.DoesNotExist:
             return Response(
-                {"error": "Invalid donation_post ID"},
-                status=status.HTTP_400_BAD_REQUEST,
+                {"error": "Invalid donation post"},
+                status=status.HTTP_404_NOT_FOUND
             )
 
-        reference = f"DON_{donation_post.id}_{int(amount)}_{int(time.time())}"
+        reference = f"DON_{donation_post.id}_{int(data['amount'])}_{int(time.time())}"
 
         # Initialize Paystack transaction
         url = "https://api.paystack.co/transaction/initialize"
@@ -68,189 +52,148 @@ class DonationViewSet(viewsets.ModelViewSet):
             "Authorization": f"Bearer {settings.PAYSTACK_SETTINGS['SECRET_KEY']}",
             "Content-Type": "application/json",
         }
-
         payload = {
-            "email": donor_email,
-            "amount": int(amount * 100),  # Paystack expects kobo
-            "currency": settings.PAYSTACK_SETTINGS.get("CURRENCY", "NGN"),
+            "email": data['email'],
+            "amount": int(data['amount'] * 100),
+            "currency": "NGN",
             "reference": reference,
             "metadata": {
                 "donation_post_id": donation_post.id,
                 "donation_post_title": donation_post.title,
-                "donor_name": donor_name or "",
-                "donor_email": donor_email,
-                # Optionally include user_id if authenticated
-                **({"user_id": request.user.id} if request.user.is_authenticated else {}),
+                "donor_name": data['name'],
+                "donor_email": data['email'],
             },
         }
 
         try:
             response = requests.post(url, json=payload, headers=headers, timeout=10)
-            data = response.json()
-        except Exception as e:
+            response.raise_for_status()
+            result = response.json()
+        except requests.RequestException:
             return Response(
-                {"error": "Failed to reach Paystack to initialize transaction."},
-                status=status.HTTP_502_BAD_GATEWAY,
+                {"error": "Payment gateway unavailable"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
             )
 
-        if not data.get("status"):
+        if not result.get("status"):
             return Response(
-                {"error": data.get("message", "Failed to initialize transaction")},
-                status=status.HTTP_400_BAD_REQUEST,
+                {"error": result.get("message", "Failed to initialize")},
+                status=status.HTTP_400_BAD_REQUEST
             )
 
-        return Response(
-            {
-                "public_key": settings.PAYSTACK_SETTINGS["PUBLIC_KEY"],
-                "email": donor_email,
-                "name": donor_name or "",
-                "amount": int(amount * 100),
-                "donation_post": donation_post.id,
-                "donation_post_title": donation_post.title,
-                "reference": data["data"]["reference"],
-                "authorization_url": data["data"]["authorization_url"],
-            },
-            status=status.HTTP_200_OK,
-        )
+        return Response({
+            "reference": result["data"]["reference"],
+            "authorization_url": result["data"]["authorization_url"],
+            "amount": int(data['amount'] * 100),
+        })
 
-    @action(detail=False, methods=["post"], url_path="verify", permission_classes=[AllowAny])
-    def verify_donation(self, request):
-        reference = request.data.get("reference")
-        amount = request.data.get("amount")
-        donation_post_id = request.data.get("donation_post")
+    @action(detail=False, methods=['post'], permission_classes=[AllowAny])
+    def verify(self, request):
+        serializer = DonationVerifySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
 
-        if not reference or not amount or not donation_post_id:
-            return Response(
-                {"error": "Reference, amount, and donation_post are required"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            amount = float(amount)
-            if amount < 100:
-                return Response(
-                    {"error": "Amount must be at least ₦100"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-        except (ValueError, TypeError):
-            return Response(
-                {"error": "Invalid amount format"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            donation_post = DonationPost.objects.get(id=donation_post_id)
-        except DonationPost.DoesNotExist:
-            return Response(
-                {"error": "Invalid donation_post ID"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Verify transaction with Paystack
-        url = f"https://api.paystack.co/transaction/verify/{reference}"
+        # Verify with Paystack
+        url = f"https://api.paystack.co/transaction/verify/{data['reference']}"
         headers = {
             "Authorization": f"Bearer {settings.PAYSTACK_SETTINGS['SECRET_KEY']}"
         }
 
         try:
             response = requests.get(url, headers=headers, timeout=10)
-            data = response.json()
-        except Exception:
+            response.raise_for_status()
+            result = response.json()
+        except requests.RequestException:
             return Response(
-                {"error": "Failed to reach Paystack for verification."},
-                status=status.HTTP_502_BAD_GATEWAY,
+                {"error": "Verification failed"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
             )
 
-        if not data.get("status") or data.get("data", {}).get("status") != "success":
+        if not result.get("status") or result["data"]["status"] != "success":
             return Response(
-                {"error": data.get("message", "Payment verification failed")},
-                status=status.HTTP_400_BAD_REQUEST,
+                {"error": "Payment not successful"},
+                status=status.HTTP_400_BAD_REQUEST
             )
 
-        paystack_amount = data.get("data", {}).get("amount", 0)
-        if paystack_amount != int(amount * 100):
+        # Validate amount
+        if result["data"]["amount"] != int(data['amount'] * 100):
             return Response(
                 {"error": "Amount mismatch"},
-                status=status.HTTP_400_BAD_REQUEST,
+                status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Extract metadata to fill donor info
-        metadata = data.get("data", {}).get("metadata", {}) or {}
-        donor_email = metadata.get("donor_email") or request.data.get("email")
-        donor_name = metadata.get("donor_name") or request.data.get("name", None)
-        user = None
-        user_id = metadata.get("user_id")
-        if user_id:
-            try:
-                user = User.objects.get(id=user_id)
-            except User.DoesNotExist:
-                user = None
-        elif request.user and request.user.is_authenticated:
-            user = request.user
+        metadata = result["data"].get("metadata", {})
 
-        # Save or update donation record
-        donation_obj, created = Donation.objects.update_or_create(
-            reference=reference,
-            defaults={
-                "user": user if user and user.is_authenticated else None,
-                "donor_email": donor_email,
-                "donor_name": donor_name,
-                "amount": amount,
-                "verified": True,
-                "donation_post": donation_post,
-            },
-        )
+        try:
+            donation_post = DonationPost.objects.get(id=data['donation_post'])
+        except DonationPost.DoesNotExist:
+            return Response(
+                {"error": "Invalid donation post"},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
-        return Response(
-            {"message": "Payment verified and saved.", "donation_id": donation_obj.id},
-            status=status.HTTP_200_OK,
-        )
+        # Save donation
+        with transaction.atomic():
+            donation, created = Donation.objects.update_or_create(
+                reference=data['reference'],
+                defaults={
+                    "donor_email": metadata.get("donor_email"),
+                    "donor_name": metadata.get("donor_name", "Anonymous"),
+                    "amount": data['amount'],
+                    "verified": True,
+                    "donation_post": donation_post,
+                }
+            )
+
+        return Response({
+            "message": "Donation verified successfully",
+            "donation_id": donation.id
+        })
+
 
 @api_view(['POST'])
 def paystack_webhook(request):
-    # Verify webhook signature
+    """Handle Paystack webhook events"""
     secret_key = settings.PAYSTACK_SETTINGS['SECRET_KEY'].encode('utf-8')
-    signature = request.META.get('HTTP_X_PAYSTACK_SIGNATURE')
-    payload = request.body
+    signature = request.META.get('HTTP_X_PAYSTACK_SIGNATURE', '')
 
-    computed_signature = hmac.new(secret_key, payload, hashlib.sha512).hexdigest()
+    computed_signature = hmac.new(
+        secret_key,
+        request.body,
+        hashlib.sha512
+    ).hexdigest()
+
     if not hmac.compare_digest(computed_signature, signature):
-        return Response({"error": "Invalid webhook signature"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"error": "Invalid signature"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
 
     event = request.data.get('event')
-    data = request.data.get('data')
+    data = request.data.get('data', {})
 
     if event == 'charge.success':
         reference = data.get('reference')
-        amount = data.get('amount') / 100
+        amount = data.get('amount', 0) / 100
         metadata = data.get('metadata', {})
 
-        donation_post_id = metadata.get('donation_post_id')
-        donor_email = metadata.get('donor_email')
-        donor_name = metadata.get('donor_name', 'Anonymous')
-        user_id = metadata.get('user_id')  # Optional
-
         try:
-            donation_post = DonationPost.objects.get(id=donation_post_id)
+            donation_post = DonationPost.objects.get(
+                id=metadata.get('donation_post_id')
+            )
         except DonationPost.DoesNotExist:
-            return Response({"error": "Invalid donation post"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(status=status.HTTP_200_OK)
 
-        user = None
-        if user_id:
-            try:
-                user = User.objects.get(id=user_id)
-            except User.DoesNotExist:
-                user = None
+        with transaction.atomic():
+            Donation.objects.update_or_create(
+                reference=reference,
+                defaults={
+                    "donor_email": metadata.get('donor_email'),
+                    "donor_name": metadata.get('donor_name', 'Anonymous'),
+                    "amount": amount,
+                    "verified": True,
+                    "donation_post": donation_post
+                }
+            )
 
-        Donation.objects.update_or_create(
-            reference=reference,
-            defaults={
-                "user": user,
-                "donor_email": donor_email,
-                "donor_name": donor_name,
-                "amount": amount,
-                "verified": True,
-                "donation_post": donation_post
-            }
-        )
     return Response(status=status.HTTP_200_OK)
