@@ -14,23 +14,27 @@ from datetime import timedelta
 from decouple import config
 import cloudinary
 import dj_database_url
-# from corsheaders.defaults import default_headers
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = config('SECRET_KEY')
 DEBUG = config('DEBUG', default=False, cast=bool)
 
-# ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1').split(',')
-ALLOWED_HOSTS = ['127.0.0.1', 'localhost', 'first-mission-humanitarian-aid-with-a.onrender.com']
-
-CORS_ALLOWED_ORIGINS=[
-    'http://localhost:5173',
-    'https://www.firstmission-ng.com'
+ALLOWED_HOSTS = [
+    '127.0.0.1',
+    'localhost',
+    'first-mission-humanitarian-aid-with-a.onrender.com'
 ]
-# CORS_ALLOW_HEADERS = list(default_headers) + [
-#     'cache-control',
-# ]
+
+# CORS Configuration
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'https://www.firstmission-ng.org',  # Fixed: .org not .com
+    'https://firstmission-ng.org',      # Without www
+]
+
+CORS_ALLOW_CREDENTIALS = True
 
 # Application definition
 INSTALLED_APPS = [
@@ -55,7 +59,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',
+    'corsheaders.middleware.CorsMiddleware',  # Must be first
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -147,6 +151,13 @@ PAYSTACK_SETTINGS = {
     "CURRENCY": "NGN",
 }
 
+# Cache (Local memory for simplicity)
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "unique-cache-name",
+    }
+}
 
 # Cloudinary
 cloudinary.config(
@@ -188,53 +199,31 @@ CKEDITOR_CONFIGS = {
             'justify',
         ]),
     },
-    'awesome_ckeditor': {
-        'toolbar': 'Full',
-        'height': 300,
-        'width': '100%',
-    },
 }
 
-# Jazzmin Settings (Modern Admin UI)
+# Jazzmin Settings
 JAZZMIN_SETTINGS = {
-    # Title
     "site_title": "First Mission Admin",
     "site_header": "First Mission",
     "site_brand": "First Mission",
-    "site_logo": None,  # Add your logo path here
+    "site_logo": None,
     "login_logo": None,
     "site_logo_classes": "img-circle",
     "site_icon": None,
-
-    # Welcome text
     "welcome_sign": "Welcome to First Mission Admin Panel",
-
-    # Copyright
     "copyright": "First Mission",
-
-    # Search model
     "search_model": ["post.Story", "post.DonationPost"],
-
-    # Top Menu
     "topmenu_links": [
         {"name": "Home", "url": "admin:index", "permissions": ["auth.view_user"]},
         {"name": "View Site", "url": "/", "new_window": True},
         {"model": "post.Story"},
         {"model": "post.DonationPost"},
     ],
-
-    # User menu
-    "usermenu_links": [
-        {"model": "auth.user"}
-    ],
-
-    # Side Menu
+    "usermenu_links": [{"model": "auth.user"}],
     "show_sidebar": True,
     "navigation_expanded": True,
     "hide_apps": [],
     "hide_models": [],
-
-    # Custom links to append to app groups
     "custom_links": {
         "post": [{
             "name": "View Stories",
@@ -243,8 +232,6 @@ JAZZMIN_SETTINGS = {
             "permissions": ["post.view_story"]
         }]
     },
-
-    # Icons
     "icons": {
         "auth": "fas fa-users-cog",
         "auth.user": "fas fa-user",
@@ -253,33 +240,18 @@ JAZZMIN_SETTINGS = {
         "post.DonationPost": "fas fa-hands-helping",
         "paystack.Donation": "fas fa-donate",
     },
-
-    # Icons for models
     "default_icon_parents": "fas fa-chevron-circle-right",
     "default_icon_children": "fas fa-circle",
-
-    # UI Customizer
     "show_ui_builder": False,
-
-    # Change view
     "changeform_format": "horizontal_tabs",
     "changeform_format_overrides": {
         "auth.user": "collapsible",
         "auth.group": "vertical_tabs"
     },
-
-    # Related modal
     "related_modal_active": True,
-
-    # Custom CSS/JS
     "custom_css": None,
     "custom_js": None,
-
-    # Theme
     "theme": "flatly",
-    # Options: default, darkly, flatly, journal, litera, lux, materia, minty, pulse, sandstone, simplex, slate, solar, spacelab, superhero, united, yeti
-
-    # Language
     "language_chooser": False,
 }
 
@@ -315,6 +287,9 @@ JAZZMIN_UI_TWEAKS = {
     }
 }
 
+# Silence CKEditor warning
+SILENCED_SYSTEM_CHECKS = ['ckeditor.W001']
+
 # Security settings for production
 if not DEBUG:
     SECURE_SSL_REDIRECT = True
@@ -322,14 +297,9 @@ if not DEBUG:
     CSRF_COOKIE_SECURE = True
     SECURE_BROWSER_XSS_FILTER = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
-    X_FRAME_OPTIONS = 'DENY'
+    X_FRAME_OPTIONS = 'SAMEORIGIN'  # Changed from DENY for admin
 
-CACHES = {
-    "default":
-    {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        "LOCATION": "unique-name"
-    }
-}
-
-SILENCED_SYSTEM_CHECKS = ['ckeditor.W001']
+    # Additional security headers
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
