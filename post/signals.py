@@ -28,10 +28,11 @@ def create_superuser_on_deploy(sender, **kwargs):
         # Get credentials from environment
         email = os.environ.get('DJANGO_SUPERUSER_EMAIL')
         password = os.environ.get('DJANGO_SUPERUSER_PASSWORD')
+        username = os.environ.get('DJANGO_SUPERUSER_USERNAME')
 
         if email and password:
             try:
-                User.objects.create_superuser(email=email, password=password)
+                User.objects.create_superuser(email=email, password=password, username=username)
                 print(f"✅ Superuser created: {email}")
             except Exception as e:
                 print(f"❌ Failed to create superuser: {e}")
